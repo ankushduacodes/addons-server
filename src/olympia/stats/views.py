@@ -5,7 +5,6 @@ import itertools
 
 from datetime import timedelta
 
-from dateutil.parser import parse
 from django import http
 from django.core.exceptions import PermissionDenied
 from django.core.files.storage import get_storage_class
