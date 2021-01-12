@@ -12,6 +12,7 @@ from django.core.files.storage import get_storage_class
 from django.db.transaction import non_atomic_requests
 from django.utils.cache import add_never_cache_headers, patch_cache_control
 from django.utils.encoding import force_text
+from waffle import switch_is_active
 
 import olympia.core.logger
 
@@ -50,35 +51,6 @@ SERIES = (
 
 
 storage = get_storage_class()()
-
-
-def get_series(model, extra_field=None, source=None, **filters):
-    """
-    Get a generator of dicts for the stats model given by the filters.
-
-    Returns {'date': , 'count': } by default. Add an extra field (such as
-    application faceting) by passing `extra_field=apps`. `apps` should be in
-    the query result.
-    """
-    extra = () if extra_field is None else (extra_field,)
-    # Put a slice on it so we get more than 10 (the default), but limit to 365.
-    qs = (
-        model.search()
-        .order_by('-date')
-        .filter(**filters)
-        .values_dict('date', 'count', *extra)
-    )
-    if source:
-        qs = qs.source(source)
-    for val in qs[:365]:
-        # Convert the datetimes to a date.
-        date_ = parse(val['date']).date()
-        rv = {'count': val['count'], 'date': date_, 'end': date_}
-        if source:
-            rv['data'] = extract(val[source])
-        elif extra_field:
-            rv['data'] = extract(val[extra_field])
-        yield rv
 
 
 def csv_fields(series):
@@ -149,12 +121,15 @@ def overview_series(request, addon, group, start, end, format):
     start_date, end_date = date_range
     check_stats_permission(request, addon)
 
-    downloads = get_download_series(
-        addon=addon, start_date=start_date, end_date=end_date
-    )
-    updates = get_updates_series(addon=addon, start_date=start_date, end_date=end_date)
-
-    series = zip_overview(downloads, updates)
+    series = []
+    if not switch_is_active('disable-bigquery'):
+        downloads = get_download_series(
+            addon=addon, start_date=start_date, end_date=end_date
+        )
+        updates = get_updates_series(
+            addon=addon, start_date=start_date, end_date=end_date
+        )
+        series = zip_overview(downloads, updates)
 
     return render_json(request, addon, series)
 
@@ -203,7 +178,11 @@ def downloads_series(request, addon, group, start, end, format):
     start_date, end_date = date_range
     check_stats_permission(request, addon)
 
-    series = get_download_series(addon=addon, start_date=start_date, end_date=end_date)
+    series = []
+    if not switch_is_active('disable-bigquery'):
+        series = get_download_series(
+            addon=addon, start_date=start_date, end_date=end_date
+        )
 
     if format == 'csv':
         return render_csv(request, addon, series, ['date', 'count'])
@@ -219,13 +198,15 @@ def download_breakdown_series(request, addon, group, start, end, format, source)
     start_date, end_date = date_range
     check_stats_permission(request, addon)
 
-    series = get_download_series(
-        addon=addon,
-        start_date=start_date,
-        end_date=end_date,
-        source=source,
-    )
-    series = rename_unknown_values(series)
+    series = []
+    if not switch_is_active('disable-bigquery'):
+        series = get_download_series(
+            addon=addon,
+            start_date=start_date,
+            end_date=end_date,
+            source=source,
+        )
+        series = rename_unknown_values(series)
 
     if format == 'csv':
         series, fields = csv_fields(series)
@@ -252,9 +233,11 @@ def usage_series(request, addon, group, start, end, format):
     date_range = check_series_params_or_404(group, start, end, format)
     check_stats_permission(request, addon)
 
-    series = get_updates_series(
-        addon=addon, start_date=date_range[0], end_date=date_range[1]
-    )
+    series = []
+    if not switch_is_active('disable-bigquery'):
+        series = get_updates_series(
+            addon=addon, start_date=date_range[0], end_date=date_range[1]
+        )
 
     if format == 'csv':
         return render_csv(request, addon, series, ['date', 'count'])
@@ -279,12 +262,14 @@ def usage_breakdown_series(request, addon, group, start, end, format, field):
     }
     source = fields[field]
 
-    series = get_updates_series(
-        addon=addon, start_date=date_range[0], end_date=date_range[1], source=source
-    )
+    series = []
+    if not switch_is_active('disable-bigquery'):
+        series = get_updates_series(
+            addon=addon, start_date=date_range[0], end_date=date_range[1], source=source
+        )
 
-    if field == 'locales':
-        series = process_locales(series)
+        if field == 'locales':
+            series = process_locales(series)
 
     if format == 'csv':
         if field == 'applications':
